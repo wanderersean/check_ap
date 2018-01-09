@@ -32,8 +32,15 @@ def client_exists():
 
 
 def connect():
-    #modify the default route
     p_default = re.compile('default')
+    p_ppp0 = re.compile('ppp0')
+
+    #check if connected
+    ret_ifconfig = subprocess.check_output('ifconfig',shell=True)
+    if len(p_ppp0.findall(ret_ifconfig)) >= 1:
+        return 
+
+    #modify the default route
     ret_route = subprocess.check_output('ip route',shell=True)
     for i in range(len(p_default.findall(ret_route))):
         subprocess.check_output('ip route del default',shell=True)
@@ -43,7 +50,6 @@ def connect():
     subprocess.check_output('/usr/bin/pon dsl-provider',shell=True)
     time.sleep(9)
 
-    p_ppp0 = re.compile('ppp0')
     ret_ifconfig = subprocess.check_output('ifconfig',shell=True)
     logger.debug('9s after connection \n%s\n'%ret_ifconfig)
 
@@ -68,6 +74,12 @@ def connect():
 
 
 def disconnect():
+    p_ppp0 = re.compile('ppp0')
+    ret_ifconfig = subprocess.check_output('ifconfig',shell=True)
+    #check if the connection is closed
+    if len(p_ppp0.findall(ret_ifconfig)) <= 0 :
+        return 
+
     try:
         subprocess.check_output('poff -a',shell=True)
     except BaseException,e:
@@ -119,35 +131,53 @@ def t_checkap():
     global time_on
     global lock
     while(not stop_event.isSet()):
+        #update exist
         exist = client_exists()
-        #client changed
-        if exist != exist_old :
-            if exist == True :
-                print 'start to connect pppoe'
+
+#        #client changed
+#        if exist != exist_old :
+#            if exist == True :
+#                print 'start to connect pppoe'
+#                connect()
+#                lock.acquire()
+#                time_on = 0
+#                lock.release()
+#
+#            elif exist == False :
+#                print 'close pppoe'
+#                disconnect()
+#                lock.acquire()
+#                time_on = 0
+#                lock.release()
+#
+#            exist_old = exist
+
+        if time_on < TIME_UP:
+            #if client exists,connect,else disconnect
+            if exist :
+                logger.debug('connect')
                 connect()
-                lock.acquire()
-                time_on = 0
-                lock.release()
-            elif exist == False :
-                print 'close pppoe'
+            else :
+                logger.debug('disconnect')
                 disconnect()
-                lock.acquire()
-                time_on = 0
-                lock.release()
 
-            exist_old = exist
+        elif time_on >= TIME_UP:
+            #disconnect when time up
+            logger.debug('disconnetc')
+            disconnect() 
 
-        #time count
+        #time count and sleep
         if exist == True :  
             time.sleep(5)
             lock.acquire()
             time_on += 5
             lock.release()
-        
-        #disconnect when time up
-        if time_on >= TIME_UP and time_on <= TIME_UP + 10 :
-            logger.info('time up, close the connection')
-            disconnect() 
+
+        elif exist == False :
+            time.sleep(3)
+            lock.acquire()
+            time_on = 0
+            lock.release()
 
 
 def t_ledshow():
@@ -173,29 +203,35 @@ def t_ledshow():
 def button_init():
     GPIO.setmode(GPIO.BCM)
     GPIO.setup(23,GPIO.IN,GPIO.PUD_UP)
-    GPIO.add_event_detect(23,GPIO.FALLING,button_down,1)
+    GPIO.setup(24,GPIO.IN,GPIO.PUD_UP)
+    GPIO.add_event_detect(23,GPIO.FALLING,button_down_renew,1)
+    GPIO.add_event_detect(24,GPIO.FALLING,button_down_stop,1)
 
 
-def button_down(channel):
+def button_down_renew(channel):
     global lock
     global time_on
     logger.info('the button down, the time renewed')
 
-    if time_on <= TIME_UP:
-        lock.acquire()
-        time_on = 0
-        lock.release()
+    lock.acquire()
+    time_on = 0
+    lock.release()
 
-    else:
-        lock.acquire()
-        time_on = 0
-        lock.release()
-        connect()
+
+
+def button_down_stop(channel):
+    global lock
+    global time_on
+    logger.info('button_stop down,time set to TIME_UP')
+    
+    lock.acquire()
+    time_on = TIME_UP
+    lock.release()
 
 
 def button_clear():
     GPIO.cleanup(23)
-
+    GPIO.cleanup(24)
 
 def sigint_handler(signum,frame):
     logger.info('Ctrl+C is pressed')
